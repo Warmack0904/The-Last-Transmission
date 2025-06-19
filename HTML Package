@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>The Last Transmission</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Source+Code+Pro&display=swap');
+  body {
+    background: #000;
+    color: #0f0;
+    font-family: 'Source Code Pro', monospace;
+    margin: 0; padding: 0;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+  #timer {
+    background: #060;
+    color: #0f0;
+    text-align: center;
+    font-weight: bold;
+    padding: 5px 0;
+    user-select: none;
+  }
+  #terminal {
+    flex-grow: 1;
+    padding: 10px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    outline: none;
+    position: relative;
+    filter: none;
+    transition: filter 0.3s ease;
+  }
+  .glitch {
+    animation: glitch-flicker 0.15s infinite;
+  }
+  @keyframes glitch-flicker {
+    0%, 100% { opacity: 1; text-shadow: none; }
+    50% { opacity: 0.6; text-shadow: 1px 0 #0f0, -1px 0 #0f0; }
+  }
+  #inputLine {
+    display: flex;
+    border-top: 1px solid #0f0;
+  }
+  #prompt {
+    padding: 5px 10px;
+    user-select: none;
+  }
+  #cmdInput {
+    background: black;
+    border: none;
+    outline: none;
+    color: #0f0;
+    flex-grow: 1;
+    font-family: 'Source Code Pro', monospace;
+    font-size: 1em;
+    padding: 5px 10px;
+  }
+  button {
+    background: #060;
+    border: 1px solid #0f0;
+    color: #0f0;
+    padding: 10px 20px;
+    cursor: pointer;
+    font-family: 'Source Code Pro', monospace;
+    font-size: 1em;
+    margin-top: 20px;
+  }
+  button:hover {
+    background: #090;
+  }
+  #audioPuzzleControls {
+    margin-top: 10px;
+  }
+  #audioPuzzleControls button {
+    margin-right: 5px;
+  }
+  /* Final message wave effect */
+  .wave {
+    display: inline-block;
+    animation: waveMotion 2s infinite;
+    font-weight: bold;
+  }
+  .wave:nth-child(odd) {
+    animation-delay: 0s;
+  }
+  .wave:nth-child(even) {
+    animation-delay: 1s;
+  }
+  @keyframes waveMotion {
+    0%, 100% { transform: translateY(0); color: #0f0; }
+    50% { transform: translateY(-4px); color: #7fff7f; }
+  }
+</style>
+</head>
+<body>
+<div id="timer">Time Left: 10:00</div>
+<div id="terminal" tabindex="0"></div>
+<div id="inputLine">
+  <div id="prompt">>></div>
+  <input type="text" id="cmdInput" autocomplete="off" autofocus spellcheck="false" />
+</div>
+
+<script>
+(() => {
+  const terminal = document.getElementById('terminal');
+  const input = document.getElementById('cmdInput');
+  const timerEl = document.getElementById('timer');
+
+  // Game State
+  const state = {
+    timeLeft: 600, // 10 minutes in seconds
+    logsUnlocked: { log1: false, log2: false, log3: false },
+    powerRerouted: false,
+    audioPuzzleSolved: false,
+    ended: false,
+    hintShown: false,
+  };
+
+  // Logs content
+  const logs = {
+    log1: `Log #1 - Technician Entry
+Date: 2077-11-04
+System failure detected in life support. Attempts to reroute power ongoing. AI responses delayed.`,
+
+    log2: `Log #2 - AI Diagnostic
+Subsystems critical. Memory corruption detected in central AI node. Recommend manual override ASAP.`,
+
+    log3: `Log #3 - Final Entry
+Crew missing. Unknown event triggered. Last transmission failed. Only one technician remains.`,
+  };
+
+  // Audio puzzle data (numeric code to decode: 7342)
+  let audioCtx, oscillator, gainNode;
+  let audioPlaying = false;
+
+  // Terminal print helper
+  function print(text) {
+    terminal.innerText += text + '\n';
+    terminal.scrollTop = terminal.scrollHeight;
+  }
+
+  // Format seconds as mm:ss
+  function formatTime(seconds) {
+    const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+    const s = (seconds % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
+  }
+
+  // Start countdown timer
+  function startTimer() {
+    const interval = setInterval(() => {
+      if (state.timeLeft <= 0) {
+        clearInterval(interval);
+        if (!state.ended) {
+          print('\n[WARNING] Time expired! Systems failing...');
+          endGame(true);
+        }
+        return;
+      }
+
+      state.timeLeft--;
+      timerEl.textContent = `Time Left: ${formatTime(state.timeLeft)}`;
+
+      // Start glitch effect in last 2 minutes
+      if(state.timeLeft <= 120 && !terminal.classList.contains('glitch')) {
+        terminal.classList.add('glitch');
+      }
+
+      // Show narrative hints near 5 minutes left once
+      if(state.timeLeft === 300 && !state.hintShown) {
+        print("\n[AI SYSTEM] You might want to try 'play audio' command to decode encrypted messages.");
+        state.hintShown = true;
+      }
+    }, 1000);
+  }
+
+  // Audio puzzle play function (beeps in sequence)
+  function playAudioPuzzle() {
+    if(audioPlaying) {
+      print('Audio puzzle is already playing.');
+      return;
+    }
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      gainNode = audioCtx.createGain();
+      gainNode.connect(audioCtx.destination);
+      gainNode.gain.value = 0.15;
+    }
+    audioPlaying = true;
+    print('Playing audio puzzle... listen carefully and type "decode [code]" with the 4-digit number.');
+
+    const code = [700, 600, 900, 800]; // frequencies in Hz representing digits 7,3,4,2 (approx)
+    let index = 0;
+
+    function playTone(freq) {
+      const osc = audioCtx.createOscillator();
+      osc.frequency.value = freq;
+      osc.type = 'square';
+      osc.connect(gainNode);
+      osc.start();
+      setTimeout(() => {
+        osc.stop();
+        index++;
+        if(index < code.length) {
+          setTimeout(() => playTone(code[index]), 300);
+        } else {
+          audioPlaying = false;
+          print('Audio puzzle finished. Awaiting your code input.');
+        }
+      }, 400);
+    }
+    playTone(code[index]);
+  }
+
+  // Commands handlers
+  const commands = {
+    help() {
+      print(`Available commands:
+help - Show this help
+read [log1|log2|log3] - Read station logs
+reroute power - Attempt to reroute power to critical systems
+status - Show system status
+send message - Send final transmission and end session
+play audio - Play audio puzzle to decode encrypted message
+decode [code] - Submit decoded 4-digit code from audio puzzle`);
+    },
+
+    read(arg) {
+      if (!arg) {
+        print('Specify which log to read: log1, log2, or log3');
+        return;
+      }
+      if (!logs.hasOwnProperty(arg)) {
+        print('Unknown log. Use log1, log2, or log3.');
+        return;
+      }
+      // Unlock conditions
+      if (arg === 'log2' && !state.logsUnlocked.log1) {
+        print('Log2 is encrypted. Unlock log1 first.');
+        return;
+      }
+      if (arg === 'log3' && (!state.logsUnlocked.log1 || !state.logsUnlocked.log2)) {
+        print('Log3 locked. Unlock log1 and log2 first.');
+        return;
+      }
+      print(`--- ${arg.toUpperCase()} ---\n${logs[arg]}`);
+      state.logsUnlocked[arg] = true;
+    },
+
+    'reroute power'() {
+      if (state.powerRerouted) {
+        print('Power already rerouted.');
+        return;
+      }
+      if (!state.logsUnlocked.log2) {
+        print('You must read log2 before rerouting power.');
+        return;
+      }
+      if(!state.audioPuzzleSolved) {
+        print('Power rerouting requires a code from the audio puzzle. Try "play audio" and then "decode [code]".');
+        return;
+      }
+      print('Rerouting power to life support and AI core...');
+      print('Power stabilized. AI responsiveness improved.');
+      state.powerRerouted = true;
+    },
+
+    status() {
+      print(`System Status:
+- Life Support: ${state.powerRerouted ? 'ONLINE' : 'OFFLINE/UNSTABLE'}
+- AI Core: ${state.powerRerouted ? 'STABLE' : 'UNSTABLE'}
+- Logs unlocked: ${Object.entries(state.logsUnlocked).filter(([_, unlocked]) => unlocked).map(([log]) => log).join(', ') || 'None'}
+- Audio puzzle solved: ${state.audioPuzzleSolved ? 'YES' : 'NO'}
+- Time remaining: ${formatTime(state.timeLeft)}`);
+    },
+
+    'send message'() {
+      if (!state.logsUnlocked.log3) {
+        print('You must unlock all logs before sending your final message.');
+        return;
+      }
+      if (state.ended) {
+        print('Session already ended.');
+        return;
+      }
+      endGame(false);
+    },
+
+    'play audio'() {
+      playAudioPuzzle();
+    },
+
+    decode(arg) {
+      if (!arg || arg.length !== 4) {
+        print('Please provide a 4-digit code to decode, e.g. "decode 7342".');
+        return;
+      }
+      if (arg === '7342') {
+        if(state.audioPuzzleSolved) {
+          print('Code already decoded.');
+          return;
+        }
+        state.audioPuzzleSolved = true;
+        print('Correct code decoded! You can now reroute power.');
+      } else {
+        print('Incorrect code. Try again.');
+      }
+    },
+
+    unknown(cmd) {
+      print(`Unknown command: ${cmd}. Type 'help' for a list of commands.`);
+    }
+  };
+
+  // End game sequence with wave effect
+  function endGame(timedOut) {
+    state.ended = true;
+    input.disabled = true;
+
+    print('\nComposing final transmission...');
+
+    let msgLines = [];
+
+    if (timedOut) {
+      msgLines = [
+        "Station systems have failed.",
+        "Transmission cutoff imminent.",
+        "No further contact possible."
+      ];
+    } else {
+      msgLines = [
+        "This is the last transmission from the station.",
+        state.powerRerouted ? "Power was successfully rerouted, stabilizing critical systems." : "Power rerouting attempts failed or were not performed.",
+        "Logs recovered:"
+      ];
+      for (const [log, unlocked] of Object.entries(state.logsUnlocked)) {
+        if (unlocked) msgLines.push(`- ${log}`);
+      }
+      msgLines.push("Hope this reaches Earth. Technician signing off.");
+    }
+
+    setTimeout(() => {
+      terminal.innerHTML = '';
+      // Create wave effect span for each char
+      const container = document.createElement('pre');
+      container.style.whiteSpace = 'pre-wrap';
+      container.style.fontSize = '1.2em';
+
+      msgLines.forEach(line => {
+        const lineDiv = document.createElement('div');
+        for (let i = 0; i < line.length; i++) {
+          const span = document.createElement('span');
+          span.textContent = line[i];
+          span.className = 'wave';
+          span.style.animationDelay = `${(i % 10) * 0.1}s`;
+          lineDiv.appendChild(span);
+        }
+        container.appendChild(lineDiv);
+      });
+
+      terminal.appendChild(container);
+
+      const btn = document.createElement('button');
+      btn.textContent = 'Exit Session';
+      btn.onclick = () => location.reload();
+      terminal.appendChild(btn);
+      input.blur();
+    }, 1500);
+  }
+
+  // Input handler
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !state.ended) {
+      const rawCmd = input.value.trim();
+      if (!rawCmd) return;
+
+      print(`>> ${rawCmd}`);
+      input.value = '';
+
+      // Parse command + argument
+      const parts = rawCmd.split(' ');
+      const cmd = parts[0].toLowerCase();
+      const arg = parts.slice(1).join(' ').toLowerCase();
+
+      if (commands.hasOwnProperty(cmd)) {
+        commands[cmd](arg);
+      } else if (commands.hasOwnProperty(rawCmd.toLowerCase())) {
+        commands[rawCmd.toLowerCase()]();
+      } else {
+        commands.unknown(rawCmd);
+      }
+    }
+  });
+
+  // Initial prompt and start timer
+  print('--- The Last Transmission ---\nType "help" for commands.\n');
+  startTimer();
+
+  // Focus input on body click
+  document.body.addEventListener('click', () => input.focus());
+})();
+</script>
+</body>
+</html>
